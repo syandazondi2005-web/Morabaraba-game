@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Morabaraba</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <h1>Morabaraba</h1>
+  <p id="instructions">Place your 12 pieces on the board. Form 3 pieces in a straight line (a "mill") to capture one of your opponent's pieces. Reduce your opponent to 2 pieces to win.</p>
+  <p id="status">Player 1's turn — place a piece</p>
+  <button id="restart-btn" onclick="restartGame()">New Game</button>
+
+  <div id="game-layout">
+    <div id="player1-profile" class="player-profile">
+      <div class="profile-circle p1-circle"></div>
+      <span>Player 1</span>
+      <div id="p1-captured" class="captured-box"></div>
+    </div>
+
+    <svg id="board" width="400" height="400" viewBox="0 0 500 500"></svg>
+
+    <div id="player2-profile" class="player-profile">
+      <div class="profile-circle p2-circle"></div>
+      <span>Player 2</span>
+      <div id="p2-captured" class="captured-box"></div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
