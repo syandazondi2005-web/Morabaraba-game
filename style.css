@@ -129,3 +129,29 @@ h1 {
   height: 10px;
   border-radius: 50%;
 }
+#board {
+  background:
+    repeating-linear-gradient(45deg, rgba(0,0,0,0.05) 0 6px, transparent 6px 12px),
+    repeating-linear-gradient(-45deg, rgba(0,0,0,0.05) 0 6px, transparent 6px 12px),
+    linear-gradient(135deg, #e2cfa0, #c9a76b);
+  border: 6px solid transparent;
+  border-image: repeating-linear-gradient(
+    90deg,
+    #b5502e 0 10px,
+    #1e1e1e 10px 20px,
+    #e8c14a 20px 30px,
+    #f4efe4 30px 40px
+  ) 6;
+}
+
+.piece-p1 {
+  fill: url(#p1Gradient);
+  stroke: #0d3566;
+  stroke-width: 1;
+}
+
+.piece-p2 {
+  fill: url(#p2Gradient);
+  stroke: #6e2e14;
+  stroke-width: 1;
+}
