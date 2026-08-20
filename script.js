@@ -26,6 +26,10 @@ const millLines = [
   [0,8,16], [2,10,18], [5,13,21], [7,15,23]
 ];
 
+const pointWeight = points.map((p, i) =>
+  connections.filter(([a, b]) => a === i || b === i).length
+);
+
 let board = new Array(24).fill(null);
 let currentPlayer = 'p1';
 let piecesPlacedP1 = 0;
@@ -37,6 +41,46 @@ let removingPiece = false;
 
 const svg = document.getElementById('board');
 const status = document.getElementById('status');
+
+// ===================== Sound effects (Web Audio API, no files needed) =====================
+
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+function playTone(frequency, duration, type = 'sine') {
+  const oscillator = audioCtx.createOscillator();
+  const gainNode = audioCtx.createGain();
+  oscillator.connect(gainNode);
+  gainNode.connect(audioCtx.destination);
+
+  oscillator.type = type;
+  oscillator.frequency.value = frequency;
+  gainNode.gain.setValueAtTime(0.15, audioCtx.currentTime);
+  gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+
+  oscillator.start();
+  oscillator.stop(audioCtx.currentTime + duration);
+}
+
+function playPlaceSound() { playTone(440, 0.08); }
+function playMillSound() { playTone(660, 0.15); setTimeout(() => playTone(880, 0.15), 100); }
+function playCaptureSound() { playTone(220, 0.2, 'sawtooth'); }
+function playWinSound() {
+  playTone(523, 0.15);
+  setTimeout(() => playTone(659, 0.15), 150);
+  setTimeout(() => playTone(784, 0.3), 300);
+}
+
+// ===================== Rendering & core game logic =====================
+
+function aiEnabled() {
+  const box = document.getElementById('ai-checkbox');
+  return box ? box.checked : false;
+}
+
+function getDifficulty() {
+  const selected = document.querySelector('input[name="difficulty"]:checked');
+  return selected ? selected.value : 'easy';
+}
 
 function drawLines() {
   connections.forEach(([a, b]) => {
@@ -65,13 +109,15 @@ function drawPoints() {
 
 function updateStatus() {
   if (removingPiece) {
-    status.textContent = `${currentPlayer === 'p1' ? 'Player 1' : 'Player 2'} formed a mill! Click an opponent's piece to remove it.`;
+    status.textContent = `${currentPlayer === 'p1' ? 'Player 1' : 'Computer'} formed a mill! ${currentPlayer === 'p1' ? "Click an opponent's piece to remove it." : 'Removing a piece...'}`;
   } else if (phase === 'placement') {
     const remainingP1 = maxPiecesEach - piecesPlacedP1;
     const remainingP2 = maxPiecesEach - piecesPlacedP2;
-    status.textContent = `${currentPlayer === 'p1' ? 'Player 1' : 'Player 2'}'s turn — place a piece (P1 left: ${remainingP1}, P2 left: ${remainingP2})`;
+    status.textContent = `${currentPlayer === 'p1' ? 'Player 1' : 'Computer'}'s turn — place a piece (P1 left: ${remainingP1}, P2 left: ${remainingP2})`;
   } else {
-    status.textContent = `${currentPlayer === 'p1' ? 'Player 1' : 'Player 2'}'s turn — move a piece`;
+    const playerPieceCount = board.filter(p => p === currentPlayer).length;
+    const flyingNote = playerPieceCount === 3 ? ' (can fly to any empty point!)' : '';
+    status.textContent = `${currentPlayer === 'p1' ? 'Player 1' : 'Computer'}'s turn — move a piece${flyingNote}`;
   }
 }
 
@@ -99,6 +145,8 @@ function addCapturedPiece(capturedPlayerId) {
 }
 
 function handleClick(id) {
+  if (aiEnabled() && currentPlayer === 'p2') return;
+
   if (removingPiece) {
     handleRemoval(id);
     return;
@@ -116,6 +164,7 @@ function handlePlacement(id) {
   board[id] = currentPlayer;
   const circle = document.getElementById('point-' + id);
   circle.classList.add(currentPlayer === 'p1' ? 'piece-p1' : 'piece-p2');
+  playPlaceSound();
 
   if (currentPlayer === 'p1') {
     piecesPlacedP1++;
@@ -128,15 +177,18 @@ function handlePlacement(id) {
   }
 
   if (checkMill(currentPlayer, id)) {
+    playMillSound();
     removingPiece = true;
     updateStatus();
     updateProfiles();
+    if (currentPlayer === 'p2' && aiEnabled()) setTimeout(aiRemoval, 600);
     return;
   }
 
   currentPlayer = currentPlayer === 'p1' ? 'p2' : 'p1';
   updateStatus();
   updateProfiles();
+  maybeAITurn();
 }
 
 function handleMovement(id) {
@@ -147,20 +199,27 @@ function handleMovement(id) {
       document.getElementById('point-' + id).setAttribute('stroke-width', 4);
     }
   } else {
+    const playerPieceCount = board.filter(p => p === currentPlayer).length;
+    const canFly = playerPieceCount === 3;
+
     const isConnected = connections.some(([a, b]) =>
       (a === selectedPiece && b === id) || (b === selectedPiece && a === id)
     );
 
-    if (isConnected && board[id] === null) {
+    const isValidMove = canFly || isConnected;
+
+    if (isValidMove && board[id] === null) {
       board[id] = currentPlayer;
       board[selectedPiece] = null;
 
       document.getElementById('point-' + id).classList.add(currentPlayer === 'p1' ? 'piece-p1' : 'piece-p2');
       document.getElementById('point-' + selectedPiece).classList.remove('piece-p1', 'piece-p2');
+      playPlaceSound();
 
       resetSelection();
 
       if (checkMill(currentPlayer, id)) {
+        playMillSound();
         removingPiece = true;
         updateStatus();
         updateProfiles();
@@ -170,6 +229,7 @@ function handleMovement(id) {
       currentPlayer = currentPlayer === 'p1' ? 'p2' : 'p1';
       updateStatus();
       updateProfiles();
+      maybeAITurn();
     } else if (board[id] === currentPlayer) {
       resetSelection();
       selectedPiece = id;
@@ -183,20 +243,33 @@ function handleMovement(id) {
 
 function handleRemoval(id) {
   const opponent = currentPlayer === 'p1' ? 'p2' : 'p1';
-  if (board[id] === opponent) {
-    addCapturedPiece(opponent);
-    board[id] = null;
-    document.getElementById('point-' + id).classList.remove('piece-p1', 'piece-p2');
-    removingPiece = false;
-    currentPlayer = opponent;
+  if (board[id] !== opponent) return;
 
-    if (checkWin()) {
-      return;
-    }
+  const opponentPieces = board
+    .map((p, idx) => (p === opponent ? idx : null))
+    .filter(idx => idx !== null);
 
-    updateStatus();
-    updateProfiles();
+  const piecesNotInMill = opponentPieces.filter(pos => !isInAnyMill(opponent, pos));
+  const isTargetInMill = isInAnyMill(opponent, id);
+
+  if (isTargetInMill && piecesNotInMill.length > 0) {
+    return;
   }
+
+  addCapturedPiece(opponent);
+  playCaptureSound();
+  board[id] = null;
+  document.getElementById('point-' + id).classList.remove('piece-p1', 'piece-p2');
+  removingPiece = false;
+  currentPlayer = opponent;
+
+  if (checkWin()) {
+    return;
+  }
+
+  updateStatus();
+  updateProfiles();
+  maybeAITurn();
 }
 
 function checkMill(playerId, movedToId) {
@@ -205,17 +278,32 @@ function checkMill(playerId, movedToId) {
   );
 }
 
+function isInAnyMill(playerId, pos) {
+  return millLines.some(line =>
+    line.includes(pos) && line.every(p => board[p] === playerId)
+  );
+}
+
+function wouldCompleteMill(pos, playerId) {
+  return millLines.some(line => {
+    if (!line.includes(pos)) return false;
+    return line.every(p => p === pos || board[p] === playerId);
+  });
+}
+
 function checkWin() {
   const p1Count = board.filter(p => p === 'p1').length;
   const p2Count = board.filter(p => p === 'p2').length;
 
   if (phase === 'movement') {
     if (p1Count <= 2) {
-      status.textContent = 'Player 2 wins! Player 1 has too few pieces left.';
+      status.textContent = 'Player 1 loses — too few pieces left. Computer wins!';
+      playWinSound();
       return true;
     }
     if (p2Count <= 2) {
-      status.textContent = 'Player 1 wins! Player 2 has too few pieces left.';
+      status.textContent = 'Player 1 wins! Computer has too few pieces left.';
+      playWinSound();
       return true;
     }
   }
@@ -245,6 +333,285 @@ function restartGame() {
   svg.innerHTML = '';
   drawLines();
   drawPoints();
+  updateStatus();
+  updateProfiles();
+}
+
+// ===================== EASY AI helpers =====================
+
+function getLegalMovesForPlayerEasy(playerId) {
+  const piecePositions = board.map((v, i) => (v === playerId ? i : null)).filter(i => i !== null);
+  const canFly = piecePositions.length === 3;
+  const moves = [];
+
+  piecePositions.forEach(from => {
+    if (canFly) {
+      board.forEach((v, to) => { if (v === null) moves.push({ from, to }); });
+    } else {
+      connections.forEach(([a, b]) => {
+        if (a === from && board[b] === null) moves.push({ from, to: b });
+        if (b === from && board[a] === null) moves.push({ from, to: a });
+      });
+    }
+  });
+
+  return moves;
+}
+
+// ===================== HARD AI (2-move lookahead) =====================
+
+function cloneBoard(b) {
+  return b.slice();
+}
+
+function checkMillOnBoard(boardState, playerId, movedToId) {
+  return millLines.some(line =>
+    line.includes(movedToId) && line.every(pos => boardState[pos] === playerId)
+  );
+}
+
+function isInAnyMillOnBoard(boardState, playerId, pos) {
+  return millLines.some(line =>
+    line.includes(pos) && line.every(p => boardState[p] === playerId)
+  );
+}
+
+function getLegalMovesOnBoard(boardState, playerId, isPlacement) {
+  if (isPlacement) {
+    return boardState
+      .map((v, i) => (v === null ? { to: i, isPlacement: true } : null))
+      .filter(m => m !== null);
+  }
+
+  const piecePositions = boardState.map((v, i) => (v === playerId ? i : null)).filter(i => i !== null);
+  const canFly = piecePositions.length === 3;
+  const moves = [];
+
+  piecePositions.forEach(from => {
+    if (canFly) {
+      boardState.forEach((v, to) => {
+        if (v === null) moves.push({ from, to });
+      });
+    } else {
+      connections.forEach(([a, b]) => {
+        if (a === from && boardState[b] === null) moves.push({ from, to: b });
+        if (b === from && boardState[a] === null) moves.push({ from, to: a });
+      });
+    }
+  });
+
+  return moves;
+}
+
+function applyMoveToBoard(boardState, move, playerId) {
+  const nb = cloneBoard(boardState);
+  if (move.isPlacement) {
+    nb[move.to] = playerId;
+  } else {
+    nb[move.to] = playerId;
+    nb[move.from] = null;
+  }
+  return nb;
+}
+
+function simulateBestCapture(boardState, capturingPlayer) {
+  const opponent = capturingPlayer === 'p1' ? 'p2' : 'p1';
+  const opponentPieces = boardState.map((v, i) => (v === opponent ? i : null)).filter(i => i !== null);
+  const notInMill = opponentPieces.filter(pos => !isInAnyMillOnBoard(boardState, opponent, pos));
+  const candidates = notInMill.length > 0 ? notInMill : opponentPieces;
+
+  if (candidates.length === 0) return boardState;
+
+  let best = candidates[0];
+  candidates.forEach(c => {
+    if (pointWeight[c] > pointWeight[best]) best = c;
+  });
+
+  const nb = cloneBoard(boardState);
+  nb[best] = null;
+  return nb;
+}
+
+function evaluateBoard(boardState, forPlayer) {
+  const opponent = forPlayer === 'p1' ? 'p2' : 'p1';
+  let score = 0;
+
+  const myCount = boardState.filter(v => v === forPlayer).length;
+  const oppCount = boardState.filter(v => v === opponent).length;
+  score += (myCount - oppCount) * 10;
+
+  boardState.forEach((v, i) => {
+    if (v === forPlayer) score += pointWeight[i];
+    else if (v === opponent) score -= pointWeight[i];
+  });
+
+  millLines.forEach(line => {
+    const vals = line.map(p => boardState[p]);
+    const forC = vals.filter(v => v === forPlayer).length;
+    const oppC = vals.filter(v => v === opponent).length;
+    const emptyC = vals.filter(v => v === null).length;
+
+    if (forC === 2 && emptyC === 1) score += 3;
+    if (oppC === 2 && emptyC === 1) score -= 3;
+  });
+
+  return score;
+}
+
+function aiChooseMove() {
+  const isPlacement = phase === 'placement';
+  const myMoves = getLegalMovesOnBoard(board, 'p2', isPlacement);
+  if (myMoves.length === 0) return null;
+
+  let bestScore = -Infinity;
+  let bestMove = myMoves[0];
+
+  myMoves.forEach(move => {
+    let simBoard = applyMoveToBoard(board, move, 'p2');
+
+    if (checkMillOnBoard(simBoard, 'p2', move.to)) {
+      simBoard = simulateBestCapture(simBoard, 'p2');
+    }
+
+    const oppMoves = getLegalMovesOnBoard(simBoard, 'p1', isPlacement);
+
+    let worstForUs;
+    if (oppMoves.length === 0) {
+      worstForUs = evaluateBoard(simBoard, 'p2');
+    } else {
+      worstForUs = Infinity;
+      oppMoves.forEach(oMove => {
+        let oppBoard = applyMoveToBoard(simBoard, oMove, 'p1');
+        if (checkMillOnBoard(oppBoard, 'p1', oMove.to)) {
+          oppBoard = simulateBestCapture(oppBoard, 'p1');
+        }
+        const score = evaluateBoard(oppBoard, 'p2');
+        if (score < worstForUs) worstForUs = score;
+      });
+    }
+
+    if (worstForUs > bestScore) {
+      bestScore = worstForUs;
+      bestMove = move;
+    }
+  });
+
+  return bestMove;
+}
+
+// ===================== AI turn dispatch =====================
+
+function maybeAITurn() {
+  if (!aiEnabled() || currentPlayer !== 'p2' || removingPiece) return;
+  setTimeout(aiTakeTurn, 500);
+}
+
+function aiTakeTurn() {
+  if (phase === 'placement') {
+    aiPlacement();
+  } else {
+    aiMovement();
+  }
+}
+
+function aiPlacement() {
+  let choice;
+
+  if (getDifficulty() === 'hard') {
+    const move = aiChooseMove();
+    if (!move) return;
+    choice = move.to;
+  } else {
+    const empties = board.map((v, i) => (v === null ? i : null)).filter(i => i !== null);
+    if (empties.length === 0) return;
+    choice = empties.find(pos => wouldCompleteMill(pos, 'p2'));
+    if (choice === undefined) choice = empties.find(pos => wouldCompleteMill(pos, 'p1'));
+    if (choice === undefined) choice = empties[Math.floor(Math.random() * empties.length)];
+  }
+
+  board[choice] = 'p2';
+  document.getElementById('point-' + choice).classList.add('piece-p2');
+  playPlaceSound();
+  piecesPlacedP2++;
+
+  if (piecesPlacedP1 >= maxPiecesEach && piecesPlacedP2 >= maxPiecesEach) {
+    phase = 'movement';
+  }
+
+  if (checkMill('p2', choice)) {
+    playMillSound();
+    removingPiece = true;
+    updateStatus();
+    updateProfiles();
+    setTimeout(aiRemoval, 600);
+    return;
+  }
+
+  currentPlayer = 'p1';
+  updateStatus();
+  updateProfiles();
+}
+
+function aiMovement() {
+  let move;
+
+  if (getDifficulty() === 'hard') {
+    move = aiChooseMove();
+  } else {
+    const moves = getLegalMovesForPlayerEasy('p2');
+    if (moves.length === 0) return;
+    move = moves.find(m => wouldCompleteMill(m.to, 'p2'));
+    if (!move) move = moves.find(m => wouldCompleteMill(m.to, 'p1'));
+    if (!move) move = moves[Math.floor(Math.random() * moves.length)];
+  }
+
+  if (!move) return;
+
+  board[move.to] = 'p2';
+  board[move.from] = null;
+  document.getElementById('point-' + move.to).classList.add('piece-p2');
+  document.getElementById('point-' + move.from).classList.remove('piece-p2');
+  playPlaceSound();
+
+  if (checkMill('p2', move.to)) {
+    playMillSound();
+    removingPiece = true;
+    updateStatus();
+    updateProfiles();
+    setTimeout(aiRemoval, 600);
+    return;
+  }
+
+  currentPlayer = 'p1';
+  updateStatus();
+  updateProfiles();
+}
+
+function aiRemoval() {
+  const opponent = 'p1';
+  const opponentPieces = board.map((p, i) => (p === opponent ? i : null)).filter(i => i !== null);
+  const notInMill = opponentPieces.filter(pos => !isInAnyMill(opponent, pos));
+  const candidates = notInMill.length > 0 ? notInMill : opponentPieces;
+
+  if (candidates.length === 0) return;
+
+  let target;
+  if (getDifficulty() === 'hard') {
+    target = candidates[0];
+    candidates.forEach(c => { if (pointWeight[c] > pointWeight[target]) target = c; });
+  } else {
+    target = candidates[Math.floor(Math.random() * candidates.length)];
+  }
+
+  addCapturedPiece(opponent);
+  playCaptureSound();
+  board[target] = null;
+  document.getElementById('point-' + target).classList.remove('piece-p1', 'piece-p2');
+  removingPiece = false;
+  currentPlayer = opponent;
+
+  if (checkWin()) return;
+
   updateStatus();
   updateProfiles();
 }
