@@ -34,7 +34,7 @@ let board = new Array(24).fill(null);
 let currentPlayer = 'p1';
 let piecesPlacedP1 = 0;
 let piecesPlacedP2 = 0;
-const maxPiecesEach = 12;
+const maxPiecesEach = 4;
 let phase = 'placement';
 let selectedPiece = null;
 let removingPiece = false;
@@ -42,7 +42,7 @@ let removingPiece = false;
 const svg = document.getElementById('board');
 const status = document.getElementById('status');
 
-// ===================== Sound effects (Web Audio API, no files needed) =====================
+// ===================== Sound effects =====================
 
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
@@ -134,6 +134,23 @@ function updateProfiles() {
   }
 }
 
+function updateMovableHighlights() {
+  points.forEach(p => {
+    const el = document.getElementById('point-' + p.id);
+    if (el) el.classList.remove('movable');
+  });
+
+  if (phase !== 'movement' || removingPiece) return;
+
+  const legalMoves = getLegalMovesForPlayerEasy(currentPlayer);
+  const movableFroms = new Set(legalMoves.map(m => m.from));
+
+  movableFroms.forEach(pos => {
+    const el = document.getElementById('point-' + pos);
+    if (el) el.classList.add('movable');
+  });
+}
+
 function addCapturedPiece(capturedPlayerId) {
   const capturedBy = capturedPlayerId === 'p1' ? 'p2-captured' : 'p1-captured';
   const box = document.getElementById(capturedBy);
@@ -181,6 +198,7 @@ function handlePlacement(id) {
     removingPiece = true;
     updateStatus();
     updateProfiles();
+    updateMovableHighlights();
     if (currentPlayer === 'p2' && aiEnabled()) setTimeout(aiRemoval, 600);
     return;
   }
@@ -188,6 +206,7 @@ function handlePlacement(id) {
   currentPlayer = currentPlayer === 'p1' ? 'p2' : 'p1';
   updateStatus();
   updateProfiles();
+  updateMovableHighlights();
   maybeAITurn();
 }
 
@@ -223,12 +242,14 @@ function handleMovement(id) {
         removingPiece = true;
         updateStatus();
         updateProfiles();
+        updateMovableHighlights();
         return;
       }
 
       currentPlayer = currentPlayer === 'p1' ? 'p2' : 'p1';
       updateStatus();
       updateProfiles();
+      updateMovableHighlights();
       maybeAITurn();
     } else if (board[id] === currentPlayer) {
       resetSelection();
@@ -269,6 +290,7 @@ function handleRemoval(id) {
 
   updateStatus();
   updateProfiles();
+  updateMovableHighlights();
   maybeAITurn();
 }
 
@@ -335,9 +357,10 @@ function restartGame() {
   drawPoints();
   updateStatus();
   updateProfiles();
+  updateMovableHighlights();
 }
 
-// ===================== EASY AI helpers =====================
+// ===================== EASY AI helpers (also used for move highlighting) =====================
 
 function getLegalMovesForPlayerEasy(playerId) {
   const piecePositions = board.map((v, i) => (v === playerId ? i : null)).filter(i => i !== null);
@@ -358,7 +381,7 @@ function getLegalMovesForPlayerEasy(playerId) {
   return moves;
 }
 
-// ===================== HARD AI (2-move lookahead) =====================
+// ===================== Lookahead engine (used by Hard AI and Hint) =====================
 
 function cloneBoard(b) {
   return b.slice();
@@ -459,33 +482,38 @@ function evaluateBoard(boardState, forPlayer) {
 }
 
 function aiChooseMove() {
+  return aiChooseMoveFor('p2');
+}
+
+function aiChooseMoveFor(forId) {
+  const opponentId = forId === 'p1' ? 'p2' : 'p1';
   const isPlacement = phase === 'placement';
-  const myMoves = getLegalMovesOnBoard(board, 'p2', isPlacement);
+  const myMoves = getLegalMovesOnBoard(board, forId, isPlacement);
   if (myMoves.length === 0) return null;
 
   let bestScore = -Infinity;
   let bestMove = myMoves[0];
 
   myMoves.forEach(move => {
-    let simBoard = applyMoveToBoard(board, move, 'p2');
+    let simBoard = applyMoveToBoard(board, move, forId);
 
-    if (checkMillOnBoard(simBoard, 'p2', move.to)) {
-      simBoard = simulateBestCapture(simBoard, 'p2');
+    if (checkMillOnBoard(simBoard, forId, move.to)) {
+      simBoard = simulateBestCapture(simBoard, forId);
     }
 
-    const oppMoves = getLegalMovesOnBoard(simBoard, 'p1', isPlacement);
+    const oppMoves = getLegalMovesOnBoard(simBoard, opponentId, isPlacement);
 
     let worstForUs;
     if (oppMoves.length === 0) {
-      worstForUs = evaluateBoard(simBoard, 'p2');
+      worstForUs = evaluateBoard(simBoard, forId);
     } else {
       worstForUs = Infinity;
       oppMoves.forEach(oMove => {
-        let oppBoard = applyMoveToBoard(simBoard, oMove, 'p1');
-        if (checkMillOnBoard(oppBoard, 'p1', oMove.to)) {
-          oppBoard = simulateBestCapture(oppBoard, 'p1');
+        let oppBoard = applyMoveToBoard(simBoard, oMove, opponentId);
+        if (checkMillOnBoard(oppBoard, opponentId, oMove.to)) {
+          oppBoard = simulateBestCapture(oppBoard, opponentId);
         }
-        const score = evaluateBoard(oppBoard, 'p2');
+        const score = evaluateBoard(oppBoard, forId);
         if (score < worstForUs) worstForUs = score;
       });
     }
@@ -497,6 +525,39 @@ function aiChooseMove() {
   });
 
   return bestMove;
+}
+
+// ===================== Hint feature =====================
+
+function showHint() {
+  if (currentPlayer !== 'p1' || removingPiece) return;
+
+  const move = aiChooseMoveFor('p1');
+  if (!move) return;
+
+  const fromEl = move.from !== undefined ? document.getElementById('point-' + move.from) : null;
+  const toEl = document.getElementById('point-' + move.to);
+
+  if (fromEl) {
+    fromEl.setAttribute('stroke', '#9b59b6');
+    fromEl.classList.add('hint-highlight');
+  }
+  toEl.setAttribute('stroke', '#9b59b6');
+  toEl.classList.add('hint-highlight');
+
+  setTimeout(() => {
+    if (fromEl) {
+      fromEl.classList.remove('hint-highlight');
+      if (board[move.from] !== null) {
+        fromEl.setAttribute('stroke', '#333');
+      }
+    }
+    toEl.classList.remove('hint-highlight');
+    if (board[move.to] === null) {
+      toEl.setAttribute('stroke', '#333');
+    }
+    updateMovableHighlights();
+  }, 2000);
 }
 
 // ===================== AI turn dispatch =====================
@@ -543,6 +604,7 @@ function aiPlacement() {
     removingPiece = true;
     updateStatus();
     updateProfiles();
+    updateMovableHighlights();
     setTimeout(aiRemoval, 600);
     return;
   }
@@ -550,6 +612,7 @@ function aiPlacement() {
   currentPlayer = 'p1';
   updateStatus();
   updateProfiles();
+  updateMovableHighlights();
 }
 
 function aiMovement() {
@@ -578,6 +641,7 @@ function aiMovement() {
     removingPiece = true;
     updateStatus();
     updateProfiles();
+    updateMovableHighlights();
     setTimeout(aiRemoval, 600);
     return;
   }
@@ -585,6 +649,7 @@ function aiMovement() {
   currentPlayer = 'p1';
   updateStatus();
   updateProfiles();
+  updateMovableHighlights();
 }
 
 function aiRemoval() {
@@ -614,9 +679,11 @@ function aiRemoval() {
 
   updateStatus();
   updateProfiles();
+  updateMovableHighlights();
 }
 
 drawLines();
 drawPoints();
 updateStatus();
 updateProfiles();
+updateMovableHighlights();
