@@ -330,7 +330,7 @@ function restartGame() {
   document.getElementById('p1-captured').innerHTML = '';
   document.getElementById('p2-captured').innerHTML = '';
 
-  svg.innerHTML = '';
+  svg.innerHTML = svg.querySelector('defs') ? svg.querySelector('defs').outerHTML : '';
   drawLines();
   drawPoints();
   updateStatus();
